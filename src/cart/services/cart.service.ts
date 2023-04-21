@@ -1,55 +1,122 @@
-import { Injectable } from '@nestjs/common';
+import {Injectable} from '@nestjs/common';
 
 import { v4 } from 'uuid';
 
 import { Cart } from '../models';
 
+import { Client } from 'pg';
+
+const connectDb = {
+  host: process.env.DATABASE_HOST,
+  port: process.env.DATABASE_PORT,
+  database: process.env.DATABASE_NAME,
+  user: process.env.DATABASE_USERNAME,
+  password: process.env.DATABASE_PASSWORD,
+  ssl: {
+    rejectUnauthorized: false,
+    ssl: true
+  }
+}
+
+
 @Injectable()
 export class CartService {
-  private userCarts: Record<string, Cart> = {};
-
-  findByUserId(userId: string): Cart {
-    return this.userCarts[ userId ];
+  async findByUserId(userId: string): Promise<Cart> {
+    const client = new Client(connectDb);
+    try {
+      await client.connect();
+      const query = `select * from carts where user_id='${userId}'`;
+      const { rows: carts } = await client.query(query);
+      if (carts) {
+        const query = `select * from cart_items where cart_id='${carts[0].id}'`;
+        const { rows: cart_items } = await client.query(query);
+        return { id: carts[0].id, items: cart_items };
+      }
+    } catch(e) {
+      console.log('e', e)
+    } finally {
+      await client.end();
+    }
   }
 
-  createByUserId(userId: string) {
-    const id = v4(v4());
-    const userCart = {
-      id,
-      items: [],
-    };
-
-    this.userCarts[ userId ] = userCart;
-
-    return userCart;
+  async createByUserId(userId: string) {
+    const client = new Client(connectDb);
+    await client.connect();
+    try {
+      const id = v4(v4());
+      const currentDate = new Date();
+      const query = `insert into carts (id, user_id, created_at, updated_at, status)
+        VALUES ($1, $2, $3, $4, $5)`;
+      return await client.query(query, [
+        id,
+        userId,
+        currentDate,
+        currentDate,
+        'ORDERED',
+      ]);
+    } catch (e) {
+      console.log('e', e)
+    } finally {
+      await client.end();
+    }
   }
 
-  findOrCreateByUserId(userId: string): Cart {
-    const userCart = this.findByUserId(userId);
+  async findOrCreateByUserId(userId: string): Promise<Cart> {
+    const userCart = await this.findByUserId(userId);
 
     if (userCart) {
       return userCart;
     }
 
-    return this.createByUserId(userId);
+    return await this.createByUserId(userId);
   }
 
-  updateByUserId(userId: string, { items }: Cart): Cart {
-    const { id, ...rest } = this.findOrCreateByUserId(userId);
+  async updateByUserId(userId: string, { items }: Cart) {
+    const client = new Client(connectDb);
+    await client.connect();
+    try {
+      const { id, items: findItems } = await this.findOrCreateByUserId(userId);
 
-    const updatedCart = {
-      id,
-      ...rest,
-      items: [ ...items ],
+      for (const item of items) {
+        const {
+          product: { id: product_id },
+          count,
+        } = item;
+        const selectQuery = `select * from cart_items where product_id='${product_id}'`;
+        const cartItems = await client.query(selectQuery);
+        const cartItem = cartItems.rows[0];
+        if (cartItem && count == 0) {
+          const deleteQuery = `delete from cart_items where cart_id='${cartItem.cart_id}' and product_id='${product_id}';`;
+          await client.query(deleteQuery);
+        } else if (cartItem) {
+          const updateQuery = `update cart_items set 
+          product_id='${product_id}',
+          cart_id='${cartItem.cart_id}',
+          count='${count}'
+          where cart_id='${cartItem.cart_id}' and product_id='${product_id}'`;
+          await client.query(updateQuery);
+        } else {
+          const query =
+              'INSERT INTO cart_items (product_id, cart_id, count) VALUES ($1, $2, $3)';
+          await client.query(query, [product_id, id, count]);
+        }
+      }
+    } catch (e) {
+      console.log('e', e)
+    } finally {
+      await client.end();
     }
-
-    this.userCarts[ userId ] = { ...updatedCart };
-
-    return { ...updatedCart };
   }
 
-  removeByUserId(userId): void {
-    this.userCarts[ userId ] = null;
+  async removeByUserId(userId): Promise<void> {
+    try {
+      const client = new Client(connectDb);
+      await client.connect();
+      const query = `delete from carts where user_id='${userId}';`;
+      return await client.query(query)?.rows;
+    } catch (e) {
+      console.log('e', e)
+    }
   }
 
 }
