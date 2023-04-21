@@ -71,7 +71,7 @@ export class CartService {
     return await this.createByUserId(userId);
   }
 
-  async updateByUserId(userId: string, { items }: Cart): Promise<Cart> {
+  async updateByUserId(userId: string, { items }: Cart) {
     const client = new Client(connectDb);
     await client.connect();
     try {
@@ -82,11 +82,25 @@ export class CartService {
           product: { id: product_id },
           count,
         } = item;
-        const query =
-            'INSERT INTO cart_items (product_id, cart_id, count) VALUES ($1, $2, $3)';
-        await client.query(query, [product_id, id, count]);
+        const selectQuery = `select * from cart_items where product_id='${product_id}'`;
+        const cartItems = await client.query(selectQuery);
+        const cartItem = cartItems.rows[0];
+        if (cartItem && count == 0) {
+          const deleteQuery = `delete from cart_items where cart_id='${cartItem.cart_id}' and product_id='${product_id}';`;
+          await client.query(deleteQuery);
+        } else if (cartItem) {
+          const updateQuery = `update cart_items set 
+          product_id='${product_id}',
+          cart_id='${cartItem.cart_id}',
+          count='${count}'
+          where cart_id='${cartItem.cart_id}' and product_id='${product_id}'`;
+          await client.query(updateQuery);
+        } else {
+          const query =
+              'INSERT INTO cart_items (product_id, cart_id, count) VALUES ($1, $2, $3)';
+          await client.query(query, [product_id, id, count]);
+        }
       }
-      return { id, items: [...items, ...findItems] };
     } catch (e) {
       console.log('e', e)
     } finally {
