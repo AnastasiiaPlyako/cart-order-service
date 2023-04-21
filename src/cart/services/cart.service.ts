@@ -18,6 +18,7 @@ const connectDb = {
   }
 }
 
+
 @Injectable()
 export class CartService {
   async findByUserId(userId: string): Promise<Cart> {
@@ -25,8 +26,12 @@ export class CartService {
     try {
       await client.connect();
       const query = `select * from carts where user_id='${userId}'`;
-      const { rows } = await client.query(query);
-      return rows;
+      const { rows: carts } = await client.query(query);
+      if (carts) {
+        const query = `select * from cart_items where cart_id='${carts[0].id}'`;
+        const { rows: cart_items } = await client.query(query);
+        return { id: carts[0].id, items: cart_items };
+      }
     } catch(e) {
       console.log('e', e)
     } finally {
@@ -70,9 +75,18 @@ export class CartService {
     const client = new Client(connectDb);
     await client.connect();
     try {
-      const { id, ...rest } = await this.findOrCreateByUserId(userId);
-      const query = `select * from cart_items where cart_id='${id}';`;
-      return await client.query(query)?.rows;
+      const { id, items: findItems } = await this.findOrCreateByUserId(userId);
+
+      for (const item of items) {
+        const {
+          product: { id: product_id },
+          count,
+        } = item;
+        const query =
+            'INSERT INTO cart_items (product_id, cart_id, count) VALUES ($1, $2, $3)';
+        await client.query(query, [product_id, id, count]);
+      }
+      return { id, items: [...items, ...findItems] };
     } catch (e) {
       console.log('e', e)
     } finally {
